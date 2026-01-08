@@ -1,0 +1,19 @@
+# Coinsub Integration Example - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Web Framework
+Flask==3.0.0
+flask-cors==4.0.0
+
+# HTTP Client
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Production Server (optional)
+gunicorn==21.2.0
+
+# Development
+pytest==7.4.3
+pytest-flask==1.3.0
