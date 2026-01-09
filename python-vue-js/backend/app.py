@@ -40,35 +40,17 @@ CORS(app,
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=True)
 
-# Enable Flask request logging with immediate output
+# Configure logging
 import logging
 import sys
 
-# Configure logging to go to both file-like stdout and stderr
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.StreamHandler(sys.stderr)
-    ],
-    force=True
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-app.logger.setLevel(logging.DEBUG)
-app.logger.info("=" * 80)
-app.logger.info("🚀 Flask app starting...")
-app.logger.info("=" * 80)
-
-# Force stdout/stderr to be unbuffered
-sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
-sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
-
-# Also use print with flush
-def log_print(*args, **kwargs):
-    """Print that always flushes immediately."""
-    print(*args, **kwargs, flush=True)
-    app.logger.info(' '.join(str(arg) for arg in args))
+app.logger.setLevel(logging.INFO)
 
 # =============================================================================
 # Configuration
@@ -96,10 +78,6 @@ completed_payments = {}
 sse_clients = {}
 sse_lock = threading.Lock()
 
-# SSE clients: session_id -> list of message queues
-sse_clients = {}
-sse_lock = threading.Lock()
-
 
 def get_coinsub_headers():
     """Generate headers for Coinsub API requests with required security headers."""
@@ -114,11 +92,6 @@ def get_coinsub_headers():
         "X-Client-Version": "1.0.0",
         "X-Platform": "python-flask"
     }
-    log_print(f"🔑 Request Headers:")
-    log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID and len(COINSUB_MERCHANT_ID) > 20 else f"   ⚠️  NO MERCHANT ID!")
-    log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY and len(COINSUB_API_KEY) > 20 else f"   ⚠️  NO API KEY!")
-    log_print(f"   User-Agent: {headers['User-Agent']}")
-    log_print(f"   X-Request-ID: {headers['X-Request-ID']}")
     return headers
 
 
@@ -130,13 +103,7 @@ def get_coinsub_headers():
 def root():
     """Root endpoint - catches misconfigured webhooks."""
     if request.method == "POST":
-        log_print("=" * 80)
-        log_print("⚠️  POST request received at root (/) endpoint")
-        log_print("   This might be a misconfigured webhook!")
-        log_print(f"   Expected webhook URL: /api/webhooks/coinsub")
-        log_print(f"   Headers: {dict(request.headers)}")
-        log_print(f"   Body: {request.get_data()[:200]}")
-        log_print("=" * 80)
+        app.logger.warning("POST request received at root (/) endpoint - might be misconfigured webhook")
         return jsonify({
             "error": "Webhook endpoint not found",
             "message": "Please configure your webhook URL to: /api/webhooks/coinsub",
@@ -153,7 +120,6 @@ def root():
 @app.route("/api/health", methods=["GET", "OPTIONS"])
 def health_check():
     """Health check endpoint."""
-    log_print("✅ Health check called")
     return jsonify({
         "status": "healthy",
         "environment": COINSUB_ENV,
@@ -161,75 +127,11 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat()
     })
 
-@app.route("/api/test", methods=["GET", "POST", "OPTIONS"])
-def test_endpoint():
-    """Test endpoint to verify requests are reaching Flask."""
-    log_print("🧪 TEST ENDPOINT CALLED")
-    return jsonify({
-        "message": "Flask is receiving requests!",
-        "method": request.method,
-        "path": request.path,
-        "headers": dict(request.headers)
-    })
-
-@app.before_request
-def log_request_info():
-    """Log all incoming requests - including OPTIONS (CORS preflight)."""
-    log_print(f"\n{'='*80}")
-    log_print(f"🔵 INCOMING REQUEST: {request.method} {request.path}")
-    if request.method == "OPTIONS":
-        log_print(f"   ⚠️  CORS PREFLIGHT REQUEST")
-    log_print(f"   Full URL: {request.url}")
-    log_print(f"   Remote Address: {request.remote_addr}")
-    log_print(f"   Headers:")
-    for key, value in request.headers:
-        log_print(f"      {key}: {value}")
-    if request.method in ['POST', 'PUT', 'PATCH']:
-        if request.is_json:
-            try:
-                data = request.get_json()
-                log_print(f"   JSON Body:")
-                log_print(json.dumps(data, indent=2))
-            except Exception as e:
-                log_print(f"   Could not parse JSON: {e}")
-        elif request.form:
-            log_print(f"   Form Data: {dict(request.form)}")
-        elif request.data:
-            log_print(f"   Raw Data: {request.data[:500]}")
-    log_print(f"{'='*80}")
-
-@app.after_request
-def log_response_info(response):
-    """Log all outgoing responses."""
-    log_print(f"\n{'='*80}")
-    log_print(f"🟢 OUTGOING RESPONSE: {request.method} {request.path}")
-    log_print(f"   Status Code: {response.status_code}")
-    log_print(f"   Response Headers:")
-    for key, value in response.headers:
-        log_print(f"      {key}: {value}")
-    if response.status_code >= 400:
-        log_print(f"   ⚠️  ERROR RESPONSE!")
-        try:
-            if response.is_json:
-                log_print(f"   Response Body: {response.get_json()}")
-            else:
-                log_print(f"   Response Text: {response.get_data(as_text=True)[:500]}")
-        except:
-            pass
-    log_print(f"{'='*80}\n")
-    return response
-
 @app.errorhandler(Exception)
 def handle_exception(e):
     """Log all exceptions."""
     import traceback
-    log_print(f"\n{'='*80}")
-    log_print(f"❌❌❌ EXCEPTION CAUGHT ❌❌❌")
-    log_print(f"   Type: {type(e).__name__}")
-    log_print(f"   Message: {str(e)}")
-    log_print(f"   Traceback:")
-    log_print(traceback.format_exc())
-    log_print(f"{'='*80}\n")
+    app.logger.error(f"Exception: {type(e).__name__}: {str(e)}", exc_info=True)
     return jsonify({"error": str(e)}), 500
 
 
@@ -253,15 +155,8 @@ def create_purchase_session():
         "metadata": {"order_id": "ORD-12345"}
     }
     """
-    log_print("=" * 80)
-    log_print("📥 CREATE SESSION REQUEST RECEIVED")
-    log_print(f"Headers: {dict(request.headers)}")
-    log_print(f"Method: {request.method}")
-    log_print(f"URL: {request.url}")
-    
     try:
         data = request.get_json()
-        log_print(f"📦 Request data: {json.dumps(data, indent=2)}")
         
         if not data or "items" not in data:
             return jsonify({"error": "Missing cart items"}), 400
@@ -293,16 +188,7 @@ def create_purchase_session():
         }
         
         # Create purchase session via Coinsub API
-        # Using the correct endpoint: /v1/purchase/session/start
         api_endpoint = f"{COINSUB_BASE_URL}/v1/purchase/session/start"
-        log_print("=" * 80)
-        log_print(f"📤 CALLING COINSUB API - CREATE SESSION")
-        log_print(f"   URL: {api_endpoint}")
-        log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID and len(COINSUB_MERCHANT_ID) > 20 else "   ⚠️  NO MERCHANT ID!")
-        log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY and len(COINSUB_API_KEY) > 20 else "   ⚠️  NO API KEY!")
-        log_print(f"   Payload:")
-        log_print(json.dumps(session_payload, indent=2))
-        log_print("=" * 80)
         
         response = requests.post(
             api_endpoint,
@@ -311,17 +197,8 @@ def create_purchase_session():
             timeout=30
         )
         
-        log_print("=" * 80)
-        log_print(f"📥 COINSUB API RESPONSE - CREATE SESSION")
-        log_print(f"   Status Code: {response.status_code}")
-        log_print(f"   Response Headers: {dict(response.headers)}")
-        log_print(f"   Response Text: {response.text[:500]}")  # First 500 chars
-        log_print("=" * 80)
-        
         if response.status_code == 201 or response.status_code == 200:
             response_json = response.json()
-            log_print(f"📋 Full Coinsub Response Structure:")
-            log_print(json.dumps(response_json, indent=2))
             
             # Coinsub API wraps response in "data" object
             session_data = response_json.get("data", response_json)
@@ -336,12 +213,10 @@ def create_purchase_session():
             )
             
             if not session_id:
-                log_print("❌ ERROR: Could not extract session_id from Coinsub response!")
-                log_print(f"   Available keys in session_data: {list(session_data.keys())}")
-                log_print(f"   Available keys in response_json: {list(response_json.keys())}")
+                app.logger.error("Could not extract session_id from Coinsub response")
                 return jsonify({"error": "Failed to extract session ID from Coinsub response"}), 500
             
-            log_print(f"✅ Extracted session_id: {session_id}")
+            app.logger.info(f"Purchase session created: {session_id}")
             
             # Store session locally for tracking
             purchase_sessions[session_id] = {
@@ -369,17 +244,7 @@ def create_purchase_session():
             except:
                 error_details = response.text
             
-            log_print("=" * 80)
-            log_print(f"❌❌❌ COINSUB API ERROR - CREATE SESSION ❌❌❌")
-            log_print(f"   Status Code: {response.status_code}")
-            log_print(f"   Request URL: {api_endpoint}")
-            log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID else "   ⚠️  NO MERCHANT ID SET!")
-            log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY else "   ⚠️  NO API KEY SET!")
-            log_print(f"   Response Headers: {dict(response.headers)}")
-            log_print(f"   Error Details: {error_details}")
-            log_print(f"   Full Response Text: {response.text}")
-            log_print("=" * 80)
-            app.logger.error(f"Coinsub API error (status {response.status_code}): {error_details}")
+            app.logger.error(f"Coinsub API error creating session (status {response.status_code}): {error_details}")
             
             return jsonify({
                 "error": "Failed to create purchase session",
@@ -388,24 +253,10 @@ def create_purchase_session():
             }), response.status_code
             
     except requests.RequestException as e:
-        error_msg = f"Network error: {str(e)}"
-        app.logger.error(error_msg)
-        log_print("=" * 80)
-        log_print(f"❌ NETWORK ERROR: {error_msg}")
-        log_print(f"Exception type: {type(e)}")
-        import traceback
-        log_print(traceback.format_exc())
-        log_print("=" * 80)
+        app.logger.error(f"Network error creating session: {str(e)}", exc_info=True)
         return jsonify({"error": "Network error connecting to Coinsub"}), 503
     except Exception as e:
-        error_msg = f"Unexpected error: {str(e)}"
-        app.logger.error(error_msg)
-        log_print("=" * 80)
-        log_print(f"❌ UNEXPECTED ERROR: {error_msg}")
-        log_print(f"Exception type: {type(e)}")
-        import traceback
-        log_print(traceback.format_exc())
-        log_print("=" * 80)
+        app.logger.error(f"Unexpected error creating session: {str(e)}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -415,10 +266,6 @@ def stream_session_events(session_id):
     Server-Sent Events (SSE) endpoint for real-time payment updates.
     Frontend connects here and receives transaction hash when webhook arrives.
     """
-    log_print("=" * 80)
-    log_print(f"📡 SSE CONNECTION REQUEST - Session: {session_id}")
-    log_print("=" * 80)
-    
     def event_stream():
         # Create a message queue for this client
         message_queue = queue.Queue()
@@ -428,8 +275,6 @@ def stream_session_events(session_id):
             if session_id not in sse_clients:
                 sse_clients[session_id] = []
             sse_clients[session_id].append(message_queue)
-            log_print(f"✅ SSE client registered for session {session_id}")
-            log_print(f"   Total clients for this session: {len(sse_clients[session_id])}")
         
         try:
             # Send initial connection message
@@ -440,7 +285,6 @@ def stream_session_events(session_id):
             if session_id in purchase_sessions:
                 session_info = purchase_sessions[session_id]
                 if session_info.get("transaction_hash"):
-                    log_print(f"✅ Transaction hash already available, sending immediately")
                     event_data = {
                         'type': 'payment.completed',
                         'session_id': session_id,
@@ -467,14 +311,13 @@ def stream_session_events(session_id):
                         # Send keepalive ping
                         yield f": keepalive\n\n"
         except GeneratorExit:
-            log_print(f"🔌 SSE client disconnected for session {session_id}")
+            app.logger.debug(f"SSE client disconnected for session {session_id}")
         finally:
             # Unregister this client
             with sse_lock:
                 if session_id in sse_clients:
                     try:
                         sse_clients[session_id].remove(message_queue)
-                        log_print(f"✅ SSE client unregistered for session {session_id}")
                         if not sse_clients[session_id]:
                             del sse_clients[session_id]
                     except ValueError:
@@ -506,20 +349,10 @@ def get_session_status(session_id):
     - expired: Session expired
     - cancelled: Session was cancelled
     """
-    log_print("=" * 80)
-    log_print(f"📥 GET SESSION STATUS REQUEST - Session: {session_id}")
-    log_print(f"   Headers: {dict(request.headers)}")
-    log_print(f"   Method: {request.method}")
-    log_print(f"   URL: {request.url}")
-    log_print("=" * 80)
-    
     try:
         # First check local session storage (updated by webhooks)
         if session_id in purchase_sessions:
             session_info = purchase_sessions[session_id]
-            log_print(f"✅ Found local session: {session_id}")
-            log_print(f"   Status: {session_info.get('status', 'unknown')}")
-            log_print(f"   Transaction Hash: {session_info.get('transaction_hash', 'N/A')}")
             return jsonify({
                 "session_id": session_id,
                 "status": session_info.get("status", "created"),
@@ -532,31 +365,23 @@ def get_session_status(session_id):
             })
         
         # If not found locally, try to fetch from Coinsub API
-        log_print(f"⚠️  Session not found locally, fetching from Coinsub API...")
         response = requests.get(
             f"{COINSUB_BASE_URL}/purchase-sessions/{session_id}",
             headers=get_coinsub_headers(),
             timeout=30
         )
         
-        log_print(f"📥 Coinsub API Response: {response.status_code}")
-        
         if response.status_code == 200:
             coinsub_data = response.json()
-            log_print(f"✅ Coinsub API Response: {json.dumps(coinsub_data, indent=2)}")
             return jsonify(coinsub_data)
         else:
-            log_print(f"❌ Coinsub API Error: {response.status_code}")
             return jsonify({
                 "error": "Session not found",
                 "details": response.json() if response.text else None
             }), 404
             
     except Exception as e:
-        log_print(f"❌ Error fetching session status: {str(e)}")
-        import traceback
-        log_print(traceback.format_exc())
-        app.logger.error(f"Error fetching session status: {str(e)}")
+        app.logger.error(f"Error fetching session status: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to fetch session status"}), 500
 
 
@@ -574,15 +399,8 @@ def request_purchase_message(session_id):
         "chain_id": 1
     }
     """
-    log_print("=" * 80)
-    log_print(f"📥 REQUEST MESSAGE REQUEST RECEIVED - Session: {session_id}")
-    log_print(f"   Headers: {dict(request.headers)}")
-    log_print(f"   Method: {request.method}")
-    log_print(f"   URL: {request.url}")
-    
     try:
         data = request.get_json()
-        log_print(f"📦 Request data: {json.dumps(data, indent=2)}")
         
         if not data or "wallet_address" not in data:
             return jsonify({"error": "Missing wallet address"}), 400
@@ -624,16 +442,7 @@ def request_purchase_message(session_id):
             "chainId": data.get("chain_id", 80002)  # Default to Polygon Amoy for test
         }
         
-        # Using the correct endpoint: /v1/purchase/message/request
         api_endpoint = f"{COINSUB_BASE_URL}/v1/purchase/message/request"
-        log_print("=" * 80)
-        log_print(f"📤 CALLING COINSUB API - REQUEST MESSAGE")
-        log_print(f"   URL: {api_endpoint}")
-        log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID and len(COINSUB_MERCHANT_ID) > 20 else "   ⚠️  NO MERCHANT ID!")
-        log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY and len(COINSUB_API_KEY) > 20 else "   ⚠️  NO API KEY!")
-        log_print(f"   Payload:")
-        log_print(json.dumps(payload, indent=2))
-        log_print("=" * 80)
         
         response = requests.post(
             api_endpoint,
@@ -642,17 +451,8 @@ def request_purchase_message(session_id):
             timeout=30
         )
         
-        log_print("=" * 80)
-        log_print(f"📥 COINSUB API RESPONSE - REQUEST MESSAGE")
-        log_print(f"   Status Code: {response.status_code}")
-        log_print(f"   Response Headers: {dict(response.headers)}")
-        log_print(f"   Response Text: {response.text[:500]}")  # First 500 chars
-        log_print("=" * 80)
-        
         if response.status_code == 200 or response.status_code == 201:
             response_json = response.json()
-            log_print(f"✅ SUCCESS! Full Response Structure:")
-            log_print(json.dumps(response_json, indent=2))
             
             # Coinsub API wraps response in "data" object
             data_wrapper = response_json.get("data", response_json)
@@ -676,24 +476,12 @@ def request_purchase_message(session_id):
             # Get message_id from data_wrapper
             message_id = data_wrapper.get("message_id") or data_wrapper.get("messageId") or data_wrapper.get("purchase_session_id")
             
-            log_print(f"📋 Extracted fields:")
-            log_print(f"   domain: {domain}")
-            log_print(f"   primary_type: {primary_type}")
-            log_print(f"   has types: {bool(types)}")
-            log_print(f"   has message: {bool(message)}")
-            log_print(f"   message_id: {message_id}")
-            
             if not primary_type:
-                log_print("❌ ERROR: primary_type is missing!")
-                log_print(f"   Available keys in typedDataMessage: {list(typed_data_message.keys()) if typed_data_message else 'N/A'}")
-                log_print(f"   Available keys in data_wrapper: {list(data_wrapper.keys())}")
+                app.logger.error("Missing primary_type in Coinsub API response")
                 return jsonify({"error": "Invalid response from Coinsub API: missing primary_type"}), 500
             
             if not domain or not types or not message:
-                log_print("❌ ERROR: Missing required typed data fields!")
-                log_print(f"   domain: {domain}")
-                log_print(f"   types: {types}")
-                log_print(f"   message: {message}")
+                app.logger.error("Missing required typed data fields in Coinsub API response")
                 return jsonify({"error": "Invalid response from Coinsub API: missing domain, types, or message"}), 500
             
             return jsonify({
@@ -712,17 +500,6 @@ def request_purchase_message(session_id):
             except:
                 error_details = response.text
             
-            log_print("=" * 80)
-            log_print(f"❌❌❌ COINSUB API ERROR - REQUEST MESSAGE ❌❌❌")
-            log_print(f"   Status Code: {response.status_code}")
-            log_print(f"   Request URL: {api_endpoint}")
-            log_print(f"   Session ID: {session_id}")
-            log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID else "   ⚠️  NO MERCHANT ID SET!")
-            log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY else "   ⚠️  NO API KEY SET!")
-            log_print(f"   Response Headers: {dict(response.headers)}")
-            log_print(f"   Error Details: {error_details}")
-            log_print(f"   Full Response Text: {response.text}")
-            log_print("=" * 80)
             app.logger.error(f"Coinsub API error requesting message (status {response.status_code}): {error_details}")
             
             return jsonify({
@@ -732,14 +509,7 @@ def request_purchase_message(session_id):
             }), response.status_code
             
     except Exception as e:
-        error_msg = f"Error requesting purchase message: {str(e)}"
-        app.logger.error(error_msg)
-        log_print("=" * 80)
-        log_print(f"❌ EXCEPTION IN REQUEST MESSAGE: {error_msg}")
-        log_print(f"Exception type: {type(e)}")
-        import traceback
-        log_print(traceback.format_exc())
-        log_print("=" * 80)
+        app.logger.error(f"Error requesting purchase message: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to request purchase message"}), 500
 
 
@@ -758,16 +528,8 @@ def submit_signed_message(session_id):
         "message_id": "..."
     }
     """
-    log_print("=" * 80)
-    log_print(f"📥 SUBMIT SIGNATURE REQUEST RECEIVED - Session: {session_id}")
-    log_print(f"   Headers: {dict(request.headers)}")
-    log_print(f"   Method: {request.method}")
-    log_print(f"   URL: {request.url}")
-    
     try:
         data = request.get_json()
-        truncated_data = {**data, 'signature': data.get('signature', '')[:20] + '...' if data.get('signature') else None}
-        log_print(f"📦 Request data (signature truncated): {json.dumps(truncated_data, indent=2)}")
         
         if not data or "signature" not in data:
             return jsonify({"error": "Missing signature"}), 400
@@ -789,15 +551,7 @@ def submit_signed_message(session_id):
             }
         }
         
-        # Using the correct endpoint: /v1/purchase/message/sign
         api_endpoint = f"{COINSUB_BASE_URL}/v1/purchase/message/sign"
-        log_print("=" * 80)
-        log_print(f"📤 CALLING COINSUB API - SUBMIT SIGNATURE")
-        log_print(f"   URL: {api_endpoint}")
-        log_print(f"   API Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY and len(COINSUB_API_KEY) > 20 else "   ⚠️  NO API KEY!")
-        log_print(f"   Payload:")
-        log_print(json.dumps(payload, indent=2))
-        log_print("=" * 80)
         
         response = requests.post(
             api_endpoint,
@@ -813,6 +567,7 @@ def submit_signed_message(session_id):
             if session_id in purchase_sessions:
                 purchase_sessions[session_id]["status"] = "processing"
             
+            app.logger.info(f"Signature submitted successfully for session {session_id}")
             return jsonify({
                 "success": True,
                 "status": result.get("status"),
@@ -826,17 +581,6 @@ def submit_signed_message(session_id):
             except:
                 error_details = response.text
             
-            log_print("=" * 80)
-            log_print(f"❌❌❌ COINSUB API ERROR - SUBMIT SIGNATURE ❌❌❌")
-            log_print(f"   Status Code: {response.status_code}")
-            log_print(f"   Request URL: {api_endpoint}")
-            log_print(f"   Session ID: {session_id}")
-            log_print(f"   Merchant-ID: {COINSUB_MERCHANT_ID[:20]}..." if COINSUB_MERCHANT_ID else "   ⚠️  NO MERCHANT ID SET!")
-            log_print(f"   API-Key: {COINSUB_API_KEY[:20]}..." if COINSUB_API_KEY else "   ⚠️  NO API KEY SET!")
-            log_print(f"   Response Headers: {dict(response.headers)}")
-            log_print(f"   Error Details: {error_details}")
-            log_print(f"   Full Response Text: {response.text}")
-            log_print("=" * 80)
             app.logger.error(f"Coinsub API error submitting signature (status {response.status_code}): {error_details}")
             
             return jsonify({
@@ -846,14 +590,7 @@ def submit_signed_message(session_id):
             }), response.status_code
             
     except Exception as e:
-        error_msg = f"Error submitting signed message: {str(e)}"
-        app.logger.error(error_msg)
-        log_print("=" * 80)
-        log_print(f"❌ EXCEPTION IN SUBMIT SIGNATURE: {error_msg}")
-        log_print(f"Exception type: {type(e)}")
-        import traceback
-        log_print(traceback.format_exc())
-        log_print("=" * 80)
+        app.logger.error(f"Error submitting signed message: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to submit signed message"}), 500
 
 
@@ -890,40 +627,18 @@ def verify_webhook_signature(payload: bytes, signature: str) -> bool:
     """
     Verify the webhook signature from Coinsub.
     
-    Coinsub signs webhook payloads using HMAC-SHA256 with your webhook secret.
-    Always verify signatures to ensure webhooks are authentic.
-    
-    Note: Coinsub cannot send webhooks to localhost. For local development:
-    1. Use ngrok or similar: ngrok http 5001
-    2. Configure the ngrok URL as your webhook endpoint in Coinsub dashboard
-    3. Copy the webhook secret to your .env file
+    Note: Signature verification is disabled in this demo for simplicity.
+    In production, you should verify webhook signatures for security.
     """
     if not COINSUB_WEBHOOK_SECRET:
-        log_print("⚠️  Webhook secret not configured! Skipping signature verification.")
-        app.logger.warning(
-            "Webhook secret not configured! "
-            "Skipping signature verification (OK for development without webhooks)"
-        )
-        # In development without webhooks configured, skip verification
-        # In production, you should ALWAYS have a webhook secret set
+        app.logger.warning("Webhook secret not configured - skipping signature verification")
         return True
     
     if not signature:
-        log_print("❌ No signature provided in webhook request")
         return False
     
-    # Coinsub may send signature in different formats:
-    # - Plain hex: "abc123..."
-    # - With prefix: "sha256=abc123..." or "hmac-sha256=abc123..."
-    # Extract the actual signature value
-    signature_value = signature
-    if '=' in signature:
-        signature_value = signature.split('=', 1)[1]
-    
-    log_print(f"🔐 Verifying signature:")
-    log_print(f"   Received: {signature_value[:20]}...")
-    log_print(f"   Secret configured: {'Yes' if COINSUB_WEBHOOK_SECRET else 'No'}")
-    log_print(f"   Secret length: {len(COINSUB_WEBHOOK_SECRET) if COINSUB_WEBHOOK_SECRET else 0}")
+    # Extract signature value (may have prefix like "sha256=...")
+    signature_value = signature.split('=', 1)[1] if '=' in signature else signature
     
     # Calculate expected signature
     expected_signature = hmac.new(
@@ -932,17 +647,11 @@ def verify_webhook_signature(payload: bytes, signature: str) -> bool:
         hashlib.sha256
     ).hexdigest()
     
-    log_print(f"   Expected: {expected_signature[:20]}...")
-    
     # Compare signatures (constant-time comparison)
     is_valid = hmac.compare_digest(signature_value, expected_signature)
     
     if not is_valid:
-        log_print("❌ Signature verification FAILED")
-        log_print(f"   Received: {signature_value}")
-        log_print(f"   Expected: {expected_signature}")
-    else:
-        log_print("✅ Signature verification PASSED")
+        app.logger.warning("Webhook signature verification failed")
     
     return is_valid
 
@@ -962,44 +671,11 @@ def handle_coinsub_webhook():
     Note: Signature verification is disabled for development.
     Respond quickly (< 5 seconds) and do heavy processing asynchronously.
     """
-    log_print("=" * 80)
-    log_print("🔔 WEBHOOK RECEIVED")
-    log_print(f"   Method: {request.method}")
-    log_print(f"   URL: {request.url}")
-    log_print(f"   Headers: {dict(request.headers)}")
-    log_print(f"   Content-Type: {request.content_type}")
-    log_print(f"   Content-Length: {request.content_length}")
-    log_print("=" * 80)
-    
     try:
-        # Log raw data for debugging
-        raw_data = request.get_data()
-        log_print(f"📦 Raw webhook data: {raw_data[:500]}")  # First 500 chars
-        
-        # Note: Signature verification disabled for development
-        # In production, you should verify webhook signatures for security
-        signature = request.headers.get("X-Coinsub-Signature", "")
-        if signature:
-            log_print(f"🔐 Signature header present: {signature[:50]}... (not verified)")
-        else:
-            log_print("⚠️  No signature header present")
-        
-        # Parse JSON
-        try:
-            event = request.get_json()
-            log_print(f"✅ Parsed JSON successfully")
-            log_print("=" * 80)
-            log_print("📦 FULL WEBHOOK PAYLOAD:")
-            log_print("=" * 80)
-            log_print(json.dumps(event, indent=2))
-            log_print("=" * 80)
-        except Exception as json_error:
-            log_print(f"❌ Failed to parse JSON: {json_error}")
-            log_print(f"   Raw data: {raw_data}")
-            return jsonify({"error": "Invalid JSON", "details": str(json_error)}), 400
+        event = request.get_json()
         
         if not event:
-            log_print("❌ Event is None or empty")
+            app.logger.warning("Empty webhook event received")
             return jsonify({"error": "Empty event data"}), 400
         
         event_type = event.get("type")
@@ -1007,30 +683,20 @@ def handle_coinsub_webhook():
         event_data = event.get("data", event)
         event_status = event.get("status")
         
-        log_print(f"📋 Event Type: {event_type}")
-        log_print(f"📋 Event Status: {event_status}")
-        log_print(f"📋 Event Data: {json.dumps(event_data, indent=2)}")
-        
         if not event_type:
-            log_print("❌ Missing event type")
+            app.logger.warning("Webhook missing event type")
             return jsonify({"error": "Missing event type"}), 400
         
-        # Handle different event types
-        log_print(f"🔄 Processing event: {event_type}")
+        app.logger.info(f"Webhook received: {event_type} (status: {event_status})")
         
         # Handle "payment" event type (check status field)
         if event_type == "payment":
             if event_status == "completed":
-                log_print("✅ Payment status is 'completed', handling as payment.completed")
                 handle_payment_completed(event_data)
             elif event_status == "failed":
-                log_print("❌ Payment status is 'failed', handling as payment.failed")
                 handle_payment_failed(event_data)
             elif event_status == "processing":
-                log_print("⏳ Payment status is 'processing', handling as payment.processing")
                 handle_payment_processing(event_data)
-            else:
-                log_print(f"⚠️  Unknown payment status: {event_status}")
         # Handle legacy event types (for backwards compatibility)
         elif event_type == "payment.completed":
             handle_payment_completed(event_data)
@@ -1041,22 +707,12 @@ def handle_coinsub_webhook():
         elif event_type == "payment.processing":
             handle_payment_processing(event_data)
         else:
-            log_print(f"⚠️  Unhandled webhook type: {event_type}")
             app.logger.info(f"Unhandled webhook type: {event_type}")
         
-        log_print("✅ Webhook processed successfully")
         # Always return 200 quickly to acknowledge receipt
         return jsonify({"received": True, "event_type": event_type})
         
     except Exception as e:
-        import traceback
-        log_print("=" * 80)
-        log_print(f"❌❌❌ WEBHOOK ERROR ❌❌❌")
-        log_print(f"   Error: {str(e)}")
-        log_print(f"   Type: {type(e).__name__}")
-        log_print(f"   Traceback:")
-        log_print(traceback.format_exc())
-        log_print("=" * 80)
         app.logger.error(f"Webhook error: {str(e)}", exc_info=True)
         # Still return 200 to prevent retries for parsing errors
         return jsonify({"received": True, "error": str(e)}), 200
@@ -1074,23 +730,7 @@ def handle_payment_completed(data: dict):
     session_id = data.get("origin_id") or data.get("session_id")
     payment_id = data.get("payment_id")
     
-    log_print("=" * 80)
-    log_print(f"✅ PAYMENT COMPLETED WEBHOOK RECEIVED")
-    log_print(f"   Payment ID: {payment_id}")
-    log_print(f"   Session ID: {session_id}")
-    log_print(f"   Transaction Hash: {transaction_hash}")
-    log_print(f"   Chain ID: {chain_id}")
-    log_print(f"   Amount: {data.get('amount')} {data.get('currency', 'USDC')}")
-    log_print(f"   Full Webhook Data: {json.dumps(data, indent=2)}")
-    
-    # Log SSE client status
-    with sse_lock:
-        log_print(f"   Active SSE sessions: {list(sse_clients.keys())}")
-        for sid, clients in sse_clients.items():
-            log_print(f"   Session {sid}: {len(clients)} client(s)")
-    log_print("=" * 80)
-    
-    app.logger.info(f"Payment completed: {payment_id}")
+    app.logger.info(f"Payment completed: {payment_id} (session: {session_id}, tx: {transaction_hash})")
     
     # Update ALL sessions - webhook might not have session_id, so update any session that matches
     # This ensures the transaction hash is available for the current user's session
@@ -1103,7 +743,6 @@ def handle_payment_completed(data: dict):
             purchase_sessions[sid]["payment_id"] = payment_id
             purchase_sessions[sid]["transaction_hash"] = transaction_hash
             purchase_sessions[sid]["chain_id"] = chain_id
-            log_print(f"✅ Updated session {sid} with payment info")
             updated_any = True
             # If we matched by session_id, we're done
             if session_id and sid == session_id:
@@ -1120,12 +759,6 @@ def handle_payment_completed(data: dict):
             "chain_id": chain_id,
             "completed_at": datetime.utcnow().isoformat()
         }
-        
-        log_print(f"✅ Payment stored: {payment_id}")
-        log_print(f"   Transaction Hash: {transaction_hash}")
-        log_print(f"   Chain ID: {chain_id}")
-        log_print(f"   Explorer URL will be generated based on chain_id")
-        log_print(f"   Total completed payments: {len(completed_payments)}")
     
     # Push transaction hash to SSE clients
     if transaction_hash:
@@ -1142,35 +775,22 @@ def handle_payment_completed(data: dict):
             
             # If we have a session_id, try to push to that specific session's clients
             if session_id and session_id in sse_clients:
-                log_print(f"📤 Pushing to SSE clients for session {session_id}")
                 for client_queue in sse_clients[session_id]:
                     try:
                         client_queue.put(event_data)
-                        log_print(f"✅ Pushed transaction hash to SSE client for session {session_id}")
                     except Exception as e:
-                        log_print(f"❌ Failed to push to SSE client: {e}")
+                        app.logger.error(f"Failed to push to SSE client: {e}")
             else:
                 # If no session_id or session_id not found, push to ALL active SSE clients
                 # This handles cases where webhook doesn't include session_id
-                log_print(f"⚠️  Session ID '{session_id}' not found in SSE clients, pushing to ALL active clients")
-                log_print(f"   Active SSE sessions: {list(sse_clients.keys())}")
-                pushed_count = 0
                 for sid, client_list in sse_clients.items():
                     # Update event_data with the correct session_id for each client
                     event_data["session_id"] = sid
                     for client_queue in client_list:
                         try:
                             client_queue.put(event_data)
-                            pushed_count += 1
-                            log_print(f"✅ Pushed transaction hash to SSE client for session {sid}")
                         except Exception as e:
-                            log_print(f"❌ Failed to push to SSE client for session {sid}: {e}")
-                if pushed_count > 0:
-                    log_print(f"📤 Pushed transaction hash to {pushed_count} SSE client(s)")
-                else:
-                    log_print(f"⚠️  No SSE clients found to push to")
-    
-    log_print("=" * 80)
+                            app.logger.error(f"Failed to push to SSE client for session {sid}: {e}")
     
     # TODO: Fulfill the order in your system
     # - Send confirmation email
@@ -1220,15 +840,6 @@ def handle_payment_processing(data: dict):
 @app.route("/api/payments", methods=["GET"])
 def list_completed_payments():
     """List all completed payments."""
-    log_print("=" * 80)
-    log_print("📋 GET PAYMENTS REQUEST")
-    log_print(f"   Total payments in memory: {len(completed_payments)}")
-    if completed_payments:
-        log_print(f"   Payment IDs: {list(completed_payments.keys())}")
-        for pid, pdata in completed_payments.items():
-            log_print(f"   Payment {pid}: {json.dumps(pdata, indent=2)}")
-    log_print("=" * 80)
-    
     # Convert dict to list and sort by completion date (newest first)
     payments_list = [
         {
@@ -1240,13 +851,188 @@ def list_completed_payments():
     # Sort by completed_at descending
     payments_list.sort(key=lambda x: x.get("completed_at", ""), reverse=True)
     
-    log_print(f"✅ Returning {len(payments_list)} payment(s)")
-    
     return jsonify({
         "success": True,
         "payments": payments_list,
         "count": len(payments_list)
     })
+
+# =============================================================================
+# Admin Endpoints
+# =============================================================================
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    """
+    Simple admin login endpoint.
+    For demo purposes, accepts admin/admin credentials.
+    """
+    try:
+        data = request.get_json()
+        username = data.get("username")
+        password = data.get("password")
+        
+        if username == "admin" and password == "admin":
+            return jsonify({
+                "success": True,
+                "token": "admin_token"  # Simple token for demo
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Invalid credentials"
+            }), 401
+    except Exception as e:
+        app.logger.error(f"Admin login error: {str(e)}", exc_info=True)
+        return jsonify({"error": "Login failed"}), 500
+
+
+@app.route("/api/admin/payments", methods=["POST"])
+def admin_get_payments():
+    """
+    Get all payments from Coinsub API.
+    Requires admin authentication (simple token check for demo).
+    """
+    try:
+        # Simple token check (in production, use proper JWT/session)
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or auth_header != "Bearer admin_token":
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        data = request.get_json() or {}
+        agreement = data.get("agreement")
+        status = data.get("status", "")
+        
+        # Call Coinsub API to get all payments
+        # Note: Coinsub API uses GET with JSON body (non-standard but supported)
+        api_endpoint = f"{COINSUB_BASE_URL}/v1/payments/all"
+        
+        payload = {
+            "agreement": agreement,
+            "status": status
+        }
+        
+        # Use requests.request() for GET with JSON body (non-standard but required by API)
+        headers = get_coinsub_headers()
+        response = requests.request(
+            method='GET',
+            url=api_endpoint,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            
+            # Log the full response structure for debugging
+            app.logger.info("=== Coinsub API Response Structure ===")
+            app.logger.info(f"Response keys: {list(response_data.keys())}")
+            app.logger.info(f"Full response (first 2000 chars): {str(response_data)[:2000]}")
+            
+            # Extract payments from nested data structure: data.data
+            data_obj = response_data.get("data", {})
+            app.logger.info(f"data_obj type: {type(data_obj)}")
+            app.logger.info(f"data_obj keys: {list(data_obj.keys()) if isinstance(data_obj, dict) else 'N/A (not a dict)'}")
+            
+            if isinstance(data_obj, dict) and "data" in data_obj:
+                payments = data_obj["data"]
+                app.logger.info(f"Extracted payments from data.data: {len(payments)} payments")
+            elif isinstance(data_obj, list):
+                payments = data_obj
+                app.logger.info(f"Extracted payments from data (list): {len(payments)} payments")
+            elif isinstance(data_obj, dict) and "payments" in data_obj:
+                payments = data_obj["payments"]
+                app.logger.info(f"Extracted payments from data.payments: {len(payments)} payments")
+            else:
+                payments = []
+                app.logger.warning(f"No payments found in response structure")
+            
+            # Log first payment structure if available
+            if payments and len(payments) > 0:
+                app.logger.info(f"First payment keys: {list(payments[0].keys())}")
+                app.logger.info(f"First payment sample: {str(payments[0])[:500]}")
+            
+            # Process payments: use the flat structure from API response
+            # API returns: payment_id, amount (already in USD value, e.g., 0.0985), status, transaction_date,
+            # block_explorer_url, transaction_hash, currency, token_name, network_id
+            # Note: amount is already formatted - no need to convert using 10^6 or 10^18
+            processed_payments = []
+            for idx, payment in enumerate(payments):
+                processed_payment = payment.copy()
+                
+                # Log payment structure for debugging (first payment only)
+                if idx == 0:
+                    app.logger.info(f"Processing payment {idx}: keys = {list(payment.keys())}")
+                
+                # Map fields to expected frontend format
+                # payment_id -> id (for frontend compatibility)
+                if "payment_id" in payment:
+                    processed_payment["id"] = payment["payment_id"]
+                
+                # amount is already in USD value (e.g., 0.0985) - no conversion needed
+                # currency and token_name are already present
+                processed_payment["display_amount"] = payment.get("amount", 0)
+                processed_payment["token_symbol"] = payment.get("currency") or payment.get("token_name", "USDC")
+                
+                # block_explorer_url -> confirmation_url (for frontend compatibility)
+                if "block_explorer_url" in payment:
+                    processed_payment["confirmation_url"] = payment["block_explorer_url"]
+                
+                # transaction_hash -> txhash (for frontend compatibility)
+                if "transaction_hash" in payment:
+                    processed_payment["txhash"] = payment["transaction_hash"]
+                
+                # network_id -> chain_id (for frontend compatibility)
+                if "network_id" in payment:
+                    processed_payment["chain_id"] = payment["network_id"]
+                
+                # transaction_date -> payment_date (for frontend compatibility)
+                if "transaction_date" in payment:
+                    processed_payment["payment_date"] = payment["transaction_date"]
+                
+                if idx == 0:
+                    app.logger.info(f"Processed payment - id: {processed_payment.get('id')}, amount: {processed_payment.get('display_amount')}, token: {processed_payment.get('token_symbol')}, confirmation_url: {processed_payment.get('confirmation_url')}")
+                
+                processed_payments.append(processed_payment)
+            
+            # Sort by transaction_date descending (newest first)
+            processed_payments.sort(
+                key=lambda x: x.get("transaction_date") or x.get("payment_date") or "",
+                reverse=True
+            )
+            
+            return jsonify({
+                "success": True,
+                "payments": processed_payments,
+                "count": len(processed_payments)
+            })
+        else:
+            error_details = None
+            try:
+                error_details = response.json() if response.text else None
+            except:
+                error_details = response.text
+            
+            app.logger.error(f"Coinsub API error getting payments (status {response.status_code}): {error_details}")
+            
+            return jsonify({
+                "error": "Failed to fetch payments",
+                "details": error_details,
+                "status_code": response.status_code
+            }), response.status_code
+            
+    except requests.RequestException as e:
+        app.logger.error(f"Network error fetching payments: {str(e)}", exc_info=True)
+        return jsonify({"error": "Network error connecting to Coinsub"}), 503
+    except Exception as e:
+        app.logger.error(f"Unexpected error fetching payments: {str(e)}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# =============================================================================
+# Demo Endpoints
+# =============================================================================
 
 @app.route("/api/demo/sessions", methods=["GET"])
 def list_sessions():

@@ -32,6 +32,14 @@ const shortAddress = computed(() => {
 
         <!-- Right side -->
         <div class="flex items-center gap-4">
+          <!-- Admin link -->
+          <router-link 
+            to="/admin/login"
+            class="text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            Admin
+          </router-link>
+          
           <!-- Cart indicator -->
           <router-link 
             v-if="cartStore.itemCount > 0"

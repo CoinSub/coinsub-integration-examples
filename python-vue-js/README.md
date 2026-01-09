@@ -1,8 +1,10 @@
 # Coinsub Purchase Session Integration
 
-> 🚀 **Fast prototyping example** for integrating [Coinsub](https://coinsub.io) cryptocurrency payments using Purchase Sessions.
+> 🚀 **Complete example** for integrating [Coinsub](https://coinsub.io) cryptocurrency payments using Purchase Sessions.
 
-This repository provides a complete, production-ready example for companies looking to integrate Coinsub's crypto payment system. It features a Python Flask backend and Vue.js frontend with WalletConnect integration.
+This repository provides a complete, production-ready example demonstrating Coinsub's crypto payment system integration. It features a Python Flask backend and Vue.js frontend with WalletConnect integration.
+
+**📖 For detailed integration instructions**, see [INTEGRATION_GUIDE.md](./INTEGRATION_GUIDE.md) - a comprehensive step-by-step tutorial for integrating Coinsub into your own application.
 
 ## 📋 Overview
 
@@ -92,7 +94,7 @@ cd python
 
 # Setup backend
 cd backend
-python -m venv venv
+python -m venv venv # or python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -166,7 +168,9 @@ python/
 │   │   ├── views/          # Page components
 │   │   │   ├── HomeView.vue
 │   │   │   ├── CheckoutView.vue
-│   │   │   └── SuccessView.vue  # Connects to SSE for real-time updates
+│   │   │   ├── SuccessView.vue  # Connects to SSE for real-time updates
+│   │   │   ├── AdminLoginView.vue  # Merchant admin login
+│   │   │   └── AdminDashboardView.vue  # Payment history dashboard
 │   │   ├── stores/         # Pinia stores
 │   │   │   ├── wallet.js   # WalletConnect integration
 │   │   │   ├── cart.js     # Shopping cart state
@@ -195,6 +199,42 @@ python/
 | `POST` | `/api/session/<id>/sign` | Submit signed message |
 | `POST` | `/api/session/<id>/cancel` | Cancel/expire session |
 | `POST` | `/api/webhooks/coinsub` | Receive Coinsub webhooks |
+| `POST` | `/api/admin/login` | Admin login (demo: admin/admin) |
+| `POST` | `/api/admin/payments` | Get all payments (requires admin auth) |
+
+### Admin Endpoints
+
+The demo includes a merchant admin dashboard for viewing payment history.
+
+**Login:**
+```json
+POST /api/admin/login
+{
+  "username": "admin",
+  "password": "admin"
+}
+```
+
+**Get Payments:**
+```json
+POST /api/admin/payments
+Headers: {
+  "Authorization": "Bearer admin_token"
+}
+Body: {
+  "agreement": null,
+  "status": ""  // Optional: "completed", "pending", "failed", or "" for all
+}
+```
+
+**Note:** The backend proxies the request to Coinsub's API endpoint (`GET /v1/payments/all`) which accepts a JSON body for filtering.
+
+**Access the Admin Dashboard:**
+1. Navigate to `/admin/login` in your browser
+2. Login with credentials: `admin` / `admin`
+3. View all payments sorted by date (descending)
+
+**Note:** This is a demo implementation with simple authentication. In production, use proper JWT tokens, session management, and role-based access control.
 
 ### Create Session Request
 
@@ -400,44 +440,59 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
     return hmac.compare_digest(signature, expected)
 ```
 
+## 👨‍💼 Merchant Admin Dashboard
+
+The demo includes a merchant admin dashboard where merchants can view their payment history directly from the Coinsub API.
+
+### Features
+
+- **Login System**: Simple authentication (demo: `admin` / `admin`)
+- **Payment History**: View all payments sorted by date (newest first)
+- **Status Filtering**: Filter payments by status (completed, pending, failed, or all)
+- **Transaction Details**: View transaction hashes with blockchain explorer links
+- **Real-time Data**: Fetches directly from Coinsub API
+
+### Accessing the Admin Dashboard
+
+1. Navigate to `/admin/login` (or click "Admin" in the navigation bar)
+2. Login with credentials: `admin` / `admin`
+3. View your payment history with transaction details
+
+### Implementation Details
+
+The admin dashboard proxies requests to Coinsub's `/v1/payments/all` endpoint, which:
+- Returns all payments for your merchant account
+- Supports filtering by `agreement` and `status`
+- Returns payments sorted by creation date (descending)
+
+**Note:** This is a demo implementation with simple token-based authentication. In production, you should:
+- Use proper JWT tokens or session management
+- Implement role-based access control (RBAC)
+- Add rate limiting to prevent abuse
+- Store admin sessions securely
+- Use HTTPS only for admin endpoints
+
 ## 💼 Integrating Into Your Application
 
-### Backend Integration Points
+> 📖 **For detailed integration instructions**, see [INTEGRATION_GUIDE.md](./INTEGRATION_GUIDE.md) - a comprehensive step-by-step tutorial covering:
+> - Backend implementation details
+> - Frontend implementation details  
+> - Wallet integration with WalletConnect
+> - EIP-712 message signing
+> - Webhook handling
+> - Admin dashboard implementation
+> - Error handling
+> - Security best practices
+> - Testing strategies
 
+### Quick Integration Overview
+
+**Backend Integration Points:**
 1. **Create Session**: Call when user initiates checkout
 2. **Handle Webhooks**: Update your database when payments complete
 3. **Order Fulfillment**: Grant access/ship products after `payment.completed`
 
-```python
-def handle_payment_completed(data: dict):
-    # Extract session_id from origin_id (Coinsub uses origin_id for purchase sessions)
-    session_id = data.get("origin_id") or data.get("session_id")
-    payment_id = data.get("payment_id")
-    
-    # Extract transaction details
-    transaction_details = data.get("transaction_details", {})
-    transaction_hash = transaction_details.get("transaction_hash")
-    chain_id = transaction_details.get("chain_id")
-    
-    # 1. Find the order in your database
-    order = Order.query.filter_by(session_id=session_id).first()
-    
-    # 2. Update order status
-    order.status = "paid"
-    order.payment_id = payment_id
-    order.transaction_hash = transaction_hash
-    order.chain_id = chain_id
-    db.session.commit()
-    
-    # 3. Fulfill the order
-    fulfill_order(order)
-    
-    # 4. Send confirmation email
-    send_confirmation_email(order.customer_email)
-```
-
-### Frontend Integration Points
-
+**Frontend Integration Points:**
 1. **Wallet Connection**: Use the `wallet.js` store as-is or adapt to your needs
 2. **Cart Management**: Replace `cart.js` with your existing cart system
 3. **Checkout Flow**: Customize the checkout UI to match your brand

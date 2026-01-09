@@ -10,9 +10,10 @@ This guide walks you through integrating Coinsub cryptocurrency payments into yo
 4. [Wallet Integration](#wallet-integration)
 5. [Message Signing (EIP-712)](#message-signing-eip-712)
 6. [Webhook Handling](#webhook-handling)
-7. [Error Handling](#error-handling)
-8. [Security Best Practices](#security-best-practices)
-9. [Testing](#testing)
+7. [Admin Dashboard](#admin-dashboard)
+8. [Error Handling](#error-handling)
+9. [Security Best Practices](#security-best-practices)
+10. [Testing](#testing)
 
 ---
 
@@ -574,6 +575,342 @@ def handle_payment_completed(data):
     # 5. Push transaction hash to SSE clients (if using SSE for real-time updates)
     # See SSE implementation in the main README
 ```
+
+---
+
+## Admin Dashboard
+
+### Overview
+
+The admin dashboard allows merchants to view their payment history directly from the Coinsub API. This is useful for:
+- Reviewing all transactions
+- Filtering payments by status
+- Viewing transaction hashes and blockchain explorer links
+- Monitoring payment activity
+
+### Backend Implementation
+
+#### 1. Admin Login Endpoint
+
+```python
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    """
+    Simple admin login endpoint.
+    For demo purposes, accepts admin/admin credentials.
+    In production, use proper authentication (JWT, OAuth, etc.)
+    """
+    data = request.get_json()
+    username = data.get("username")
+    password = data.get("password")
+    
+    if username == "admin" and password == "admin":
+        # In production, generate a proper JWT token
+        return jsonify({
+            "success": True,
+            "token": "admin_token"  # Replace with JWT in production
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Invalid credentials"
+        }), 401
+```
+
+#### 2. Get Payments Endpoint
+
+```python
+@app.route("/api/admin/payments", methods=["POST"])
+def admin_get_payments():
+    """
+    Get all payments from Coinsub API.
+    Requires admin authentication.
+    """
+    # Verify authentication token
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or auth_header != "Bearer admin_token":
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.get_json() or {}
+    agreement = data.get("agreement")
+    status = data.get("status", "")
+    
+    # Call Coinsub API
+    api_endpoint = f"{COINSUB_BASE_URL}/v1/payments/all"
+    
+    payload = {
+        "agreement": agreement,
+        "status": status
+    }
+    
+    # Note: Coinsub API uses GET with JSON body (non-standard)
+    response = requests.request(
+        method='GET',
+        url=api_endpoint,
+        headers={
+            "Merchant-ID": COINSUB_MERCHANT_ID,
+            "API-Key": COINSUB_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        timeout=30
+    )
+    
+    if response.status_code == 200:
+        response_data = response.json()
+        
+        # Extract payments from nested data structure: data.data
+        data_obj = response_data.get("data", {})
+        if isinstance(data_obj, dict) and "data" in data_obj:
+            payments = data_obj["data"]
+        elif isinstance(data_obj, list):
+            payments = data_obj
+        else:
+            payments = []
+        
+        # Process payments: map fields for frontend compatibility
+        # API returns: payment_id, amount (already in USD), status, transaction_date,
+        # block_explorer_url, transaction_hash, currency, token_name, network_id
+        processed_payments = []
+        for payment in payments:
+            processed_payment = payment.copy()
+            
+            # Map fields to expected frontend format
+            if "payment_id" in payment:
+                processed_payment["id"] = payment["payment_id"]
+            if "block_explorer_url" in payment:
+                processed_payment["confirmation_url"] = payment["block_explorer_url"]
+            if "transaction_hash" in payment:
+                processed_payment["txhash"] = payment["transaction_hash"]
+            if "network_id" in payment:
+                processed_payment["chain_id"] = payment["network_id"]
+            if "transaction_date" in payment:
+                processed_payment["payment_date"] = payment["transaction_date"]
+            
+            # amount is already in USD value (e.g., 0.0985) - no conversion needed
+            processed_payment["display_amount"] = payment.get("amount", 0)
+            processed_payment["token_symbol"] = payment.get("currency") or payment.get("token_name", "USDC")
+            
+            processed_payments.append(processed_payment)
+        
+        # Sort by transaction_date descending (newest first)
+        processed_payments.sort(
+            key=lambda x: x.get("transaction_date") or x.get("payment_date") or "",
+            reverse=True
+        )
+        
+        return jsonify({
+            "success": True,
+            "payments": processed_payments,
+            "count": len(processed_payments)
+        })
+    else:
+        return jsonify({
+            "error": "Failed to fetch payments",
+            "status_code": response.status_code
+        }), response.status_code
+```
+
+### Frontend Implementation
+
+#### 1. Admin Login Component
+
+```vue
+<!-- views/AdminLoginView.vue -->
+<template>
+  <div class="min-h-screen flex items-center justify-center">
+    <form @submit.prevent="handleLogin">
+      <input v-model="username" type="text" placeholder="Username" />
+      <input v-model="password" type="password" placeholder="Password" />
+      <button type="submit" :disabled="loading">
+        {{ loading ? 'Logging in...' : 'Sign in' }}
+      </button>
+      <div v-if="error" class="error">{{ error }}</div>
+    </form>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import axios from 'axios'
+
+const router = useRouter()
+const username = ref('')
+const password = ref('')
+const loading = ref(false)
+const error = ref('')
+
+const handleLogin = async () => {
+  loading.value = true
+  error.value = ''
+  
+  try {
+    const response = await axios.post('/api/admin/login', {
+      username: username.value,
+      password: password.value
+    })
+    
+    if (response.data.success) {
+      // Store token in sessionStorage
+      sessionStorage.setItem('admin_token', response.data.token)
+      router.push('/admin/dashboard')
+    } else {
+      error.value = response.data.error || 'Login failed'
+    }
+  } catch (err) {
+    error.value = err.response?.data?.error || 'Login failed'
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+```
+
+#### 2. Admin Dashboard Component
+
+```vue
+<!-- views/AdminDashboardView.vue -->
+<template>
+  <div>
+    <h1>Payment History</h1>
+    
+    <!-- Filters -->
+    <div>
+      <select v-model="filters.status" @change="fetchPayments">
+        <option value="">All</option>
+        <option value="completed">Completed</option>
+        <option value="pending">Pending</option>
+        <option value="failed">Failed</option>
+      </select>
+      <button @click="fetchPayments" :disabled="loading">
+        {{ loading ? 'Loading...' : 'Refresh' }}
+      </button>
+    </div>
+    
+    <!-- Payments Table -->
+    <table>
+      <thead>
+        <tr>
+          <th>Payment ID</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Date</th>
+          <th>Transaction</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="payment in payments" :key="payment.id || payment.payment_id">
+          <td>{{ payment.id || payment.payment_id }}</td>
+          <td>
+            <span v-if="payment.display_amount !== undefined">
+              {{ formatAmount(payment.display_amount) }} {{ payment.token_symbol || payment.currency || 'USDC' }}
+            </span>
+            <span v-else>
+              {{ payment.amount }} {{ payment.currency || 'USDC' }}
+            </span>
+          </td>
+          <td>
+            <span :class="`status-${payment.status}`">
+              {{ payment.status }}
+            </span>
+          </td>
+          <td>{{ formatDate(payment.transaction_date || payment.payment_date) }}</td>
+          <td>
+            <a 
+              v-if="payment.confirmation_url || payment.block_explorer_url"
+              :href="payment.confirmation_url || payment.block_explorer_url"
+              target="_blank"
+            >
+              {{ truncateHash(payment.txhash || payment.transaction_hash) }}
+            </a>
+            <span v-else>-</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import axios from 'axios'
+
+const router = useRouter()
+const payments = ref([])
+const loading = ref(false)
+const filters = ref({ status: '', agreement: null })
+
+const getAuthToken = () => sessionStorage.getItem('admin_token')
+
+const fetchPayments = async () => {
+  const token = getAuthToken()
+  if (!token) {
+    router.push('/admin/login')
+    return
+  }
+  
+  loading.value = true
+  
+  try {
+    const response = await axios.post(
+      '/api/admin/payments',
+      filters.value,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    )
+    
+    if (response.data.success) {
+      payments.value = response.data.payments || []
+    }
+  } catch (err) {
+    if (err.response?.status === 401) {
+      sessionStorage.removeItem('admin_token')
+      router.push('/admin/login')
+    }
+  } finally {
+    loading.value = false
+  }
+}
+
+const formatDate = (dateString) => {
+  if (!dateString) return '-'
+  return new Date(dateString).toLocaleString()
+}
+
+const formatAmount = (amount) => {
+  if (amount === undefined || amount === null) return '-'
+  // Format to show up to 6 decimal places, removing trailing zeros
+  return parseFloat(amount.toFixed(6)).toString()
+}
+
+const truncateHash = (hash) => {
+  if (!hash) return ''
+  return `${hash.substring(0, 6)}...${hash.substring(hash.length - 4)}`
+}
+
+onMounted(() => {
+  if (!getAuthToken()) {
+    router.push('/admin/login')
+  } else {
+    fetchPayments()
+  }
+})
+</script>
+```
+
+### Production Considerations
+
+1. **Authentication**: Replace simple token with JWT or OAuth2
+2. **Authorization**: Implement role-based access control
+3. **Rate Limiting**: Add rate limiting to prevent abuse
+4. **Session Management**: Use secure, HTTP-only cookies
+5. **HTTPS Only**: Enforce HTTPS for all admin endpoints
+6. **Audit Logging**: Log all admin actions for security
+7. **Input Validation**: Validate and sanitize all inputs
+8. **Error Handling**: Don't expose sensitive error details
 
 ---
 

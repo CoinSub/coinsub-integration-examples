@@ -20,6 +20,16 @@ const routes = [
     path: '/success',
     name: 'success',
     component: () => import('./views/SuccessView.vue')
+  },
+  {
+    path: '/admin/login',
+    name: 'admin-login',
+    component: () => import('./views/AdminLoginView.vue')
+  },
+  {
+    path: '/admin/dashboard',
+    name: 'admin-dashboard',
+    component: () => import('./views/AdminDashboardView.vue')
   }
 ]
 

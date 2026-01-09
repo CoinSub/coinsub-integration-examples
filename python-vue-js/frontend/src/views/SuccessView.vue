@@ -43,24 +43,14 @@ onMounted(() => {
   
   // Connect to SSE endpoint to receive transaction hash when webhook arrives
   if (checkoutStore.sessionId) {
-    console.log('📡 Connecting to SSE endpoint for session:', checkoutStore.sessionId)
-    
     const sseUrl = `/api/session/${checkoutStore.sessionId}/events`
     eventSource = new EventSource(sseUrl)
-    
-    eventSource.onopen = () => {
-      console.log('✅ SSE connection opened')
-    }
     
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
-        console.log('📨 SSE message received:', data)
         
-        if (data.type === 'connected') {
-          console.log('✅ Connected to SSE stream')
-        } else if (data.type === 'payment.completed') {
-          console.log('✅ Payment completed event received!')
+        if (data.type === 'payment.completed') {
           transactionHash.value = data.transaction_hash
           chainId.value = data.chain_id
           paymentId.value = data.payment_id
@@ -73,17 +63,15 @@ onMounted(() => {
           }
         }
       } catch (error) {
-        console.error('❌ Failed to parse SSE message:', error)
+        console.error('Failed to parse SSE message:', error)
       }
     }
     
-    eventSource.onerror = (error) => {
-      console.error('❌ SSE connection error:', error)
+    eventSource.onerror = () => {
       // Don't close on error - EventSource will auto-reconnect
       // But if we've been waiting too long, stop waiting
       setTimeout(() => {
         if (!transactionHash.value && waitingForWebhook.value) {
-          console.log('⏱️ SSE timeout - stopping wait')
           waitingForWebhook.value = false
           if (eventSource) {
             eventSource.close()
@@ -99,7 +87,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (eventSource) {
-    console.log('🔌 Closing SSE connection')
     eventSource.close()
     eventSource = null
   }
