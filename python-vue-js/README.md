@@ -67,13 +67,13 @@ Purchase Sessions are ideal for companies with **large product catalogs** becaus
        │                   │ 13. Webhook       │
        │                   │<──────────────────│
        │                   │   (type: payment, │
-       │                   │    status: completed)
+       │                   │ status: completed)|
        │                   │                   │
        │                   │ 14. Push tx hash  │
-       │  15. Receive hash  │                   │
-       │<──────────────────│   (via SSE)      │
+       │  15. Receive hash │                   │
+       │<──────────────────│   (via SSE)       │
        │                   │                   │
-       │  16. Show tx link  │                   │
+       │  16. Show tx link │                   │
        │                   │                   │
 ```
 
