@@ -58,12 +58,21 @@ Purchase Sessions are ideal for companies with **large product catalogs** becaus
        │                   │ 11. Payment ID    │
        │                   │<──────────────────│
        │                   │                   │
-       │  12. Success!     │                   │
-       │<──────────────────│                   │
+       │  12. Success page │                   │
+       │   (SSE connect)   │                   │
+       │──────────────────>│                   │
        │                   │                   │
        │                   │ 13. Webhook       │
        │                   │<──────────────────│
-       │                   │   (payment.completed)
+       │                   │   (type: payment, │
+       │                   │    status: completed)
+       │                   │                   │
+       │                   │ 14. Push tx hash  │
+       │  15. Receive hash  │                   │
+       │<──────────────────│   (via SSE)      │
+       │                   │                   │
+       │  16. Show tx link  │                   │
+       │                   │                   │
 ```
 
 ## 🚀 Quick Start
@@ -99,22 +108,27 @@ cp .env.example .env
 **Backend (`backend/.env`):**
 ```env
 COINSUB_API_KEY=your-api-key-here
+COINSUB_MERCHANT_ID=your-merchant-id-here
 COINSUB_WEBHOOK_SECRET=your-webhook-secret
 COINSUB_ENV=test
-PORT=5000
+PORT=5001
 FLASK_DEBUG=true
 ```
 
 **Frontend (`frontend/.env`):**
 ```env
 VITE_WALLETCONNECT_PROJECT_ID=your-walletconnect-project-id
+VITE_COINSUB_ENV=test
 ```
 
-### 3. Get Your API Key
+**Note:** Set `VITE_COINSUB_ENV=production` for production mode. In test mode, WalletConnect will support testnets (Ethereum Sepolia, Polygon Amoy, Base Sepolia). In production mode, it will support mainnets (Ethereum, Polygon, Base).
+
+### 3. Get Your API Key and Merchant ID
 
 1. Sign up at [test.coinsub.io](https://test.coinsub.io) (development) or [app.coinsub.io](https://app.coinsub.io) (production)
-2. Navigate to **Settings → API Keys**
-3. Create a new API key and copy it to your `.env`
+2. Navigate to [API Keys](https://app.coinsub.io/merchant/profile/apikeys) in your merchant profile
+3. Copy your **Merchant ID** and create a new **API key** (both are available on the same page)
+4. Add both `COINSUB_MERCHANT_ID` and `COINSUB_API_KEY` to your `.env` file
 
 ### 4. Run the Application
 
@@ -152,7 +166,7 @@ python/
 │   │   ├── views/          # Page components
 │   │   │   ├── HomeView.vue
 │   │   │   ├── CheckoutView.vue
-│   │   │   └── SuccessView.vue
+│   │   │   └── SuccessView.vue  # Connects to SSE for real-time updates
 │   │   ├── stores/         # Pinia stores
 │   │   │   ├── wallet.js   # WalletConnect integration
 │   │   │   ├── cart.js     # Shopping cart state
@@ -176,6 +190,7 @@ python/
 | `GET` | `/api/health` | Health check |
 | `POST` | `/api/create-session` | Create a purchase session |
 | `GET` | `/api/session/<id>/status` | Get session status |
+| `GET` | `/api/session/<id>/events` | **SSE stream** for real-time payment updates |
 | `POST` | `/api/session/<id>/message` | Request purchase message to sign |
 | `POST` | `/api/session/<id>/sign` | Submit signed message |
 | `POST` | `/api/session/<id>/cancel` | Cancel/expire session |
@@ -187,16 +202,19 @@ python/
 POST /api/create-session
 {
   "items": [
-    {"name": "Product 1", "price": 29.99, "quantity": 1},
-    {"name": "Product 2", "price": 49.99, "quantity": 2}
+    {"id": "merch_001", "name": "Coinsub Logo T-Shirt", "price": 0.25, "quantity": 1},
+    {"id": "merch_002", "name": "Coinsub Hoodie", "price": 0.30, "quantity": 1}
   ],
-  "currency": "USD",
+  "currency": "USDC",
   "customer_email": "customer@example.com",
   "metadata": {
-    "order_id": "ORD-12345"
+    "order_id": "ORD-12345",
+    "source": "coinsub-demo"
   }
 }
 ```
+
+**Note:** Prices are in USDC (not USD). For testing, use small amounts (cents) to work within the Circle Faucet's 1 USDC limit.
 
 ### Request Message
 
@@ -204,9 +222,17 @@ POST /api/create-session
 POST /api/session/{session_id}/message
 {
   "wallet_address": "0x...",
-  "chain_id": 1
+  "chain_id": 80002
 }
 ```
+
+**Note:** Use the appropriate chain ID for your network:
+- Ethereum Sepolia: `11155111`
+- Polygon Amoy: `80002`
+- Base Sepolia: `84532`
+- Ethereum Mainnet: `1`
+- Polygon Mainnet: `137`
+- Base Mainnet: `8453`
 
 ### Submit Signature
 
@@ -215,38 +241,147 @@ POST /api/session/{session_id}/sign
 {
   "signature": "0x...",
   "wallet_address": "0x...",
+  "chain_id": 80002,
   "message_id": "..."
 }
 ```
 
-## 🔐 Webhooks
+**Note:** The `chain_id` parameter is required and should match the chain used for signing.
 
-Coinsub sends webhooks for payment lifecycle events. Configure your webhook URL in the Coinsub dashboard.
+### SSE Events Endpoint
+
+The frontend connects to this endpoint using Server-Sent Events (SSE) to receive real-time transaction hash updates when webhooks arrive:
+
+```javascript
+// Frontend automatically connects on success page
+const eventSource = new EventSource(`/api/session/${sessionId}/events`)
+
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data)
+  if (data.type === 'payment.completed') {
+    // Transaction hash received!
+    console.log('Transaction:', data.transaction_hash)
+  }
+}
+```
+
+**How it works:**
+1. Frontend connects to SSE endpoint after payment submission
+2. Backend receives webhook from Coinsub
+3. Backend pushes transaction hash to connected SSE clients
+4. Frontend receives transaction hash instantly (no polling needed)
+
+## 🔐 Webhooks & Real-Time Updates
+
+Coinsub sends webhooks for payment lifecycle events. Configure your webhook URL in your merchant profile settings.
 
 > ⚠️ **Note**: Coinsub cannot send webhooks to `localhost`. For local development, use a tunneling service like [ngrok](https://ngrok.com) to expose your local server.
 
+### Configuring Webhooks
+
+1. **Test Environment**: Go to [https://test.coinsub.io/merchant/profile/edit](https://test.coinsub.io/merchant/profile/edit)
+2. **Production Environment**: Go to [https://app.coinsub.io/merchant/profile/edit](https://app.coinsub.io/merchant/profile/edit)
+3. Enter your **complete webhook URL** in the webhook configuration section:
+   - Must include the full path: `https://your-domain.com/api/webhooks/coinsub`
+   - Do NOT enter just the base domain (e.g., `https://your-domain.com`)
+4. Copy the webhook secret and add it to your `.env` file as `COINSUB_WEBHOOK_SECRET`
+
 ### Local Webhook Testing with ngrok
+
+Webhooks are server-to-server notifications. When Coinsub processes a payment, it sends a webhook to your backend server. The frontend (Vue.js) doesn't receive webhooks directly.
+
+## Why Webhooks + SSE Are Essential
+
+This demo uses **webhooks as the primary source of truth** for payment status, with **SSE for real-time frontend updates**:
+
+### Webhook Benefits:
+- ⚡ **Real-time**: Instant notification when payment status changes
+- 🎯 **Efficient**: Only one request per event (no polling)
+- 🔒 **Reliable**: Works even if user closes browser (backend still receives notifications)
+- 📊 **Scalable**: Better for production with many concurrent payments
+- 🎪 **Complete**: Receive all event types (payment.completed, payment.failed, etc.)
+- ✅ **Production-ready**: Industry standard for payment processing
+
+### SSE Benefits:
+- 🚀 **Instant UI updates**: Frontend receives transaction hash immediately when webhook arrives
+- 🔄 **No polling**: Eliminates constant HTTP requests
+- 💡 **Efficient**: Single persistent connection instead of repeated requests
+- ⚡ **Real-time**: User sees transaction hash as soon as it's available
+
+### How It Works:
+
+1. **User signs transaction** → Frontend submits signature to backend
+2. **Backend submits to Coinsub** → Payment processing begins
+3. **User redirected** → Success page
+4. **Frontend connects** → Opens SSE connection to `/api/session/<id>/events`
+5. **Webhook arrives** → Coinsub sends webhook to backend when payment completes
+6. **Backend processes** → Extracts transaction hash and pushes to SSE clients
+7. **Frontend receives** → Transaction hash appears instantly via SSE
+8. **User sees** → Transaction hash and blockchain explorer link displayed
+
+**Note:** The demo uses webhooks + SSE for real-time updates. No polling is used. When a webhook arrives, it means the payment went through successfully, and the transaction hash is immediately pushed to the frontend via SSE.
+
+**For production**, you should:
+- Store webhook data in a **database** (not memory)
+- Process webhooks **asynchronously** for order fulfillment
+- Send confirmation emails based on webhook events
+- Update order status in your database when webhooks arrive 
 
 ```bash
 # Install ngrok (https://ngrok.com/download)
-# Then expose your local backend:
-ngrok http 5000
+# Sign up and setup your ngrok auth token
+ngrok config add-authtoken your-token-goes-here
 
-# You'll get a public URL like: https://abc123.ngrok.io
-# Configure this in Coinsub dashboard: https://abc123.ngrok.io/api/webhooks/coinsub
+# Then expose your local backend:
+ngrok http 5001
+
+# You'll get a public URL like: https://abc123.ngrok-free.dev
 ```
 
-The **webhook secret** is used to verify that incoming webhooks are genuinely from Coinsub (not spoofed). This is critical for production but also recommended during development with ngrok.
+**⚠️ IMPORTANT:** When configuring your webhook URL in Coinsub, you must include the full path:
+
+1. Go to [https://test.coinsub.io/merchant/profile/edit](https://test.coinsub.io/merchant/profile/edit)
+2. Enter the **complete webhook URL** (not just the base domain):
+   ```
+   https://abc123.ngrok-free.dev/api/webhooks/coinsub
+   ```
+   **NOT:** `https://abc123.ngrok-free.dev` ❌  
+   **YES:** `https://abc123.ngrok-free.dev/api/webhooks/coinsub` ✅
+
+3. Copy the webhook secret from the same page and add it to your `.env` file as `COINSUB_WEBHOOK_SECRET`
+
+**Note:** If you only enter the base ngrok URL (without `/api/webhooks/coinsub`), Coinsub will send webhooks to `/` which will result in a 404 or 500 error. Always include the full path!
+
+**Note:** Signature verification is disabled in this demo for simplicity. In production, you should verify webhook signatures to ensure they're authentic and prevent spoofing.
 
 ### Webhook Events
 
-| Event | Description |
-|-------|-------------|
-| `payment.created` | Payment initiated |
-| `payment.processing` | Processing on-chain |
-| `payment.completed` | Payment successful ✅ |
-| `payment.failed` | Payment failed ❌ |
-| `session.expired` | Session expired |
+Coinsub sends webhooks with `type: "payment"` and a `status` field indicating the payment state:
+
+| Event Type | Status | Description |
+|------------|--------|-------------|
+| `payment` | `completed` | Payment successful ✅ |
+| `payment` | `failed` | Payment failed ❌ |
+| `payment` | `processing` | Processing on-chain |
+| `session.expired` | - | Session expired |
+
+**Webhook Structure:**
+```json
+{
+  "type": "payment",
+  "status": "completed",
+  "origin_id": "sess_935fb78b-5fd6-47e6-a2d6-627c42edca8c",
+  "payment_id": "paym_0d55a60f-7e37-47dc-92b6-da49cba792cf",
+  "amount": 0.25,
+  "currency": "USDC",
+  "transaction_details": {
+    "transaction_hash": "0x0266ef66d8e36640c46f3439b7bafb2943540f9605907a28e7bc6fc20b04c1ad",
+    "chain_id": 80002
+  }
+}
+```
+
+**Note:** The `origin_id` field contains the purchase session ID. Use `origin_id` (not `session_id`) to match webhooks to your purchase sessions.
 
 ### Webhook Verification
 
@@ -275,8 +410,14 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
 
 ```python
 def handle_payment_completed(data: dict):
-    session_id = data.get("session_id")
+    # Extract session_id from origin_id (Coinsub uses origin_id for purchase sessions)
+    session_id = data.get("origin_id") or data.get("session_id")
     payment_id = data.get("payment_id")
+    
+    # Extract transaction details
+    transaction_details = data.get("transaction_details", {})
+    transaction_hash = transaction_details.get("transaction_hash")
+    chain_id = transaction_details.get("chain_id")
     
     # 1. Find the order in your database
     order = Order.query.filter_by(session_id=session_id).first()
@@ -284,6 +425,8 @@ def handle_payment_completed(data: dict):
     # 2. Update order status
     order.status = "paid"
     order.payment_id = payment_id
+    order.transaction_hash = transaction_hash
+    order.chain_id = chain_id
     db.session.commit()
     
     # 3. Fulfill the order
@@ -303,18 +446,25 @@ def handle_payment_completed(data: dict):
 
 The demo supports the following EVM chains:
 
+**Test Mode** (when `VITE_COINSUB_ENV=test`):
+- Ethereum Sepolia
+- Polygon Amoy
+- Base Sepolia
+
+**Production Mode** (when `VITE_COINSUB_ENV=production`):
 - Ethereum Mainnet
-- Polygon
-- Arbitrum
-- Optimism  
-- Base
+- Polygon Mainnet
+- Base Mainnet
 
 Add more chains in `frontend/src/stores/wallet.js`:
 
 ```javascript
-import { bsc, avalanche } from 'viem/chains'
+import { bsc, avalanche, arbitrum, optimism } from 'viem/chains'
 
-const chains = [mainnet, polygon, arbitrum, optimism, base, bsc, avalanche]
+// Add to the chains array based on environment
+const chains = isTestMode 
+  ? [sepolia, polygonAmoy, baseSepolia, /* your testnets */]
+  : [mainnet, polygon, base, bsc, avalanche, arbitrum, optimism]
 ```
 
 ## 🎨 Customization
@@ -360,34 +510,10 @@ Use `test.coinsub.io` for development. Test payments don't move real funds.
 ### Test Wallets
 
 For testing, use any Web3 wallet on test networks:
-- Get testnet ETH from faucets
-- Connect to Sepolia or other testnets
-
-## 🚀 Production Deployment
-
-### Checklist
-
-- [ ] Switch `COINSUB_ENV` to `production`
-- [ ] Use production API key from [app.coinsub.io](https://app.coinsub.io)
-- [ ] Set up production webhook URL
-- [ ] Enable HTTPS
-- [ ] Configure CORS for your domain
-- [ ] Set `FLASK_DEBUG=false`
-- [ ] Use a production WSGI server (gunicorn)
-
-### Deploy Backend
-
-```bash
-# Using gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
-```
-
-### Deploy Frontend
-
-```bash
-npm run build
-# Serve the dist/ folder with your preferred static host
-```
+- Get testnet ETH from faucets (e.g., [Sepolia Faucet](https://sepoliafaucet.com))
+- Get testnet USDC from [Circle Faucet](https://faucet.circle.com/) (max 1 USDC per 2 hours)
+- Connect to Sepolia, Polygon Amoy, or Base Sepolia testnets
+- **Note:** Product prices in the demo are set in cents (0.10-0.30 USDC) to allow multiple test purchases within the Circle Faucet limit
 
 ## 📚 Resources
 

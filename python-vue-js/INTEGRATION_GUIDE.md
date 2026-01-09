@@ -13,7 +13,6 @@ This guide walks you through integrating Coinsub cryptocurrency payments into yo
 7. [Error Handling](#error-handling)
 8. [Security Best Practices](#security-best-practices)
 9. [Testing](#testing)
-10. [Going to Production](#going-to-production)
 
 ---
 
@@ -75,9 +74,12 @@ app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
 
 COINSUB_API_KEY = os.getenv("COINSUB_API_KEY")
-COINSUB_BASE_URL = os.getenv("COINSUB_ENV") == "production" \
-    and "https://app.coinsub.io/api" \
-    or "https://test.coinsub.io/api"
+COINSUB_MERCHANT_ID = os.getenv("COINSUB_MERCHANT_ID")
+COINSUB_ENV = os.getenv("COINSUB_ENV", "test")
+COINSUB_BASE_URL = (
+    "https://test-api.coinsub.io" if COINSUB_ENV == "test" 
+    else "https://api.coinsub.io"
+)
 ```
 
 ### 2. Creating a Purchase Session
@@ -97,15 +99,18 @@ def create_purchase_session():
     
     # Create session with Coinsub
     response = requests.post(
-        f"{COINSUB_BASE_URL}/purchase-sessions",
+        f"{COINSUB_BASE_URL}/v1/purchase/session/start",
         headers={
-            "Authorization": f"Bearer {COINSUB_API_KEY}",
+            "Merchant-ID": COINSUB_MERCHANT_ID,
+            "API-Key": COINSUB_API_KEY,
             "Content-Type": "application/json"
         },
         json={
+            "name": f"Order with {len(data['items'])} items",
+            "details": f"Order with {len(data['items'])} items",
+            "currency": data.get("currency", "USDC"),
             "amount": total,
-            "currency": data.get("currency", "USD"),
-            "description": f"Order with {len(data['items'])} items",
+            "recurring": False,
             "metadata": {
                 "items": data["items"],
                 "customer_email": data.get("customer_email")
@@ -133,16 +138,31 @@ After the user connects their wallet, request the EIP-712 message they need to s
 def request_message(session_id):
     data = request.get_json()
     
+    # Get session data to extract product info
+    session_info = purchase_sessions.get(session_id, {})
+    items = session_info.get("items", [])
+    product_name = ", ".join([item.get("name", "Item") for item in items]) if items else "Purchase"
+    price = session_info.get("amount", 0)
+    
     response = requests.post(
-        f"{COINSUB_BASE_URL}/purchase-messages/request",
+        f"{COINSUB_BASE_URL}/v1/purchase/message/request",
         headers={
-            "Authorization": f"Bearer {COINSUB_API_KEY}",
+            "Merchant-ID": COINSUB_MERCHANT_ID,
+            "API-Key": COINSUB_API_KEY,
             "Content-Type": "application/json"
         },
         json={
-            "session_id": session_id,
+            "purchase_session_id": session_id,
             "wallet_address": data["wallet_address"],
-            "chain_id": data.get("chain_id", 1)
+            "product_name": product_name,
+            "price": price,
+            "metadata": session_info.get("metadata", {}),
+            "token": "USDC",
+            "recurring": False,
+            "duration": "One-time",
+            "frequency": "One-time",
+            "interval": "One-time",
+            "chainId": data.get("chain_id", 80002)
         }
     )
     
@@ -171,16 +191,19 @@ def submit_signature(session_id):
     data = request.get_json()
     
     response = requests.post(
-        f"{COINSUB_BASE_URL}/purchase-messages/submit",
+        f"{COINSUB_BASE_URL}/v1/purchase/message/sign",
         headers={
-            "Authorization": f"Bearer {COINSUB_API_KEY}",
+            "Merchant-ID": COINSUB_MERCHANT_ID,
+            "API-Key": COINSUB_API_KEY,
             "Content-Type": "application/json"
         },
         json={
-            "session_id": session_id,
-            "signature": data["signature"],
-            "wallet_address": data["wallet_address"],
-            "message_id": data.get("message_id")
+            "purchase_session_id": session_id,
+            "signed_typed_data": {
+                "signature": data["signature"],
+                "signing_address": data["wallet_address"],
+                "chainId": data.get("chain_id", 80002)
+            }
         }
     )
     
@@ -488,13 +511,23 @@ def handle_webhook():
     
     event = request.get_json()
     event_type = event.get("type")
-    data = event.get("data", {})
+    event_status = event.get("status")
+    # Coinsub webhooks can have data nested in "data" field OR be flat at root level
+    event_data = event.get("data", event)
     
-    # Handle event types
-    if event_type == "payment.completed":
-        handle_payment_completed(data)
+    # Handle "payment" event type (check status field)
+    if event_type == "payment":
+        if event_status == "completed":
+            handle_payment_completed(event_data)
+        elif event_status == "failed":
+            handle_payment_failed(event_data)
+        elif event_status == "processing":
+            handle_payment_processing(event_data)
+    # Handle legacy event types (for backwards compatibility)
+    elif event_type == "payment.completed":
+        handle_payment_completed(event_data)
     elif event_type == "payment.failed":
-        handle_payment_failed(data)
+        handle_payment_failed(event_data)
     
     return jsonify({"received": True})
 ```
@@ -503,8 +536,14 @@ def handle_webhook():
 
 ```python
 def handle_payment_completed(data):
-    session_id = data["session_id"]
-    payment_id = data["payment_id"]
+    # Extract session_id from origin_id (Coinsub uses origin_id for purchase sessions)
+    session_id = data.get("origin_id") or data.get("session_id")
+    payment_id = data.get("payment_id")
+    
+    # Extract transaction details
+    transaction_details = data.get("transaction_details", {})
+    transaction_hash = transaction_details.get("transaction_hash")
+    chain_id = transaction_details.get("chain_id")
     
     # 1. Find the order
     order = Order.query.filter_by(
@@ -518,6 +557,8 @@ def handle_payment_completed(data):
     # 2. Update order status
     order.status = "paid"
     order.payment_id = payment_id
+    order.transaction_hash = transaction_hash
+    order.chain_id = chain_id
     order.paid_at = datetime.utcnow()
     db.session.commit()
     
@@ -529,6 +570,9 @@ def handle_payment_completed(data):
     
     # 4. Notify customer
     send_confirmation_email(order)
+    
+    # 5. Push transaction hash to SSE clients (if using SSE for real-time updates)
+    # See SSE implementation in the main README
 ```
 
 ---
@@ -691,42 +735,6 @@ def test_checkout_flow():
     })
     assert response.status_code == 200
     assert 'typed_data' in response.json
-```
-
----
-
-## Going to Production
-
-### Checklist
-
-- [ ] Switch to production API key
-- [ ] Update `COINSUB_ENV` to `production`
-- [ ] Configure production webhook URL in dashboard
-- [ ] Set up SSL/HTTPS
-- [ ] Configure production CORS origins
-- [ ] Enable error monitoring (Sentry, etc.)
-- [ ] Set up logging
-- [ ] Use production WSGI server (gunicorn)
-- [ ] Set `FLASK_DEBUG=false`
-
-### Environment Variables
-
-```env
-# Production settings
-COINSUB_API_KEY=sk_live_your_production_key
-COINSUB_WEBHOOK_SECRET=whsec_your_production_secret
-COINSUB_ENV=production
-FLASK_DEBUG=false
-```
-
-### Production Server
-
-```bash
-# Use gunicorn in production
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
-
-# With async workers for better performance
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker app:app
 ```
 
 ---

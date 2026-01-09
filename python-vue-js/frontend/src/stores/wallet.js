@@ -1,14 +1,36 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { createWeb3Modal, defaultWagmiConfig } from '@web3modal/wagmi'
-import { mainnet, polygon, arbitrum, optimism, base } from 'viem/chains'
+import { 
+  mainnet, 
+  polygon, 
+  base,
+  sepolia,
+  polygonAmoy,
+  baseSepolia
+} from 'viem/chains'
 import { getAccount, disconnect, signTypedData, watchAccount, reconnect } from '@wagmi/core'
 
 // WalletConnect Project ID - Get yours at https://cloud.walletconnect.com
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || 'YOUR_PROJECT_ID'
 
-// Chains supported for payments
-const chains = [mainnet, polygon, arbitrum, optimism, base]
+// Determine environment (defaults to 'test' for safety)
+const isTestMode = import.meta.env.VITE_COINSUB_ENV !== 'production'
+
+// Configure chains based on environment
+// Test mode: testnets for development
+// Production: mainnets for live transactions
+const chains = isTestMode 
+  ? [
+      sepolia,           // Ethereum Sepolia Testnet
+      polygonAmoy,       // Polygon Amoy Testnet
+      baseSepolia        // Base Sepolia Testnet
+    ]
+  : [
+      mainnet,           // Ethereum Mainnet
+      polygon,           // Polygon Mainnet
+      base               // Base Mainnet
+    ]
 
 // Wagmi configuration
 const metadata = {
@@ -39,7 +61,17 @@ if (typeof window !== 'undefined') {
     themeVariables: {
       '--w3m-accent': '#0ea5e9',
       '--w3m-border-radius-master': '12px'
-    }
+    },
+    // Feature MetaMask as a top choice
+    featuredWalletIds: ['io.metamask'],
+    // Include other popular wallets
+    includeWalletIds: [
+      'io.metamask',
+      'com.coinbase.wallet',
+      'me.rainbow',
+      'com.trustwallet.app',
+      'io.zerion.wallet'
+    ]
   })
 }
 
