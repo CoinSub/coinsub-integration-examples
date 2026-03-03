@@ -33,6 +33,11 @@ cd python-vue-js
 # See README.md for detailed setup instructions
 ```
 
+### [Unity embed balance](./unity/RocketrampEmbedBalanceIntegration)
+
+Embed button example featuring:
+- **Unity**: Unity application with external browser link for access token usage
+
 ## 🚀 Getting Started
 
 1. **Choose an example** that matches your tech stack
